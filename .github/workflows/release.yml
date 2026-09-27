@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 编译并发布 Release
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 MSVC 环境
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # /utf-8 必须加：源码是 UTF-8 无 BOM，缺这个参数界面中文会乱码
+      - name: 编译
+        shell: cmd
+        run: cl /nologo /utf-8 /EHsc /O2 /W3 /DUNICODE /D_UNICODE MovingBackground.cpp /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib gdiplus.lib shell32.lib comdlg32.lib advapi32.lib winmm.lib /OUT:MovingBackground.exe
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'MovingBackground.exe')) { throw '编译没有产出 MovingBackground.exe' }
+          Get-Item 'MovingBackground.exe' | Format-List Name, Length
+
+      # zip 里必须同时含 exe 和 bg.jpg：程序默认按 exe 同目录加载 bg.jpg，
+      # 只给 exe 的话用户首次运行会直接报「无法加载图片」
+      - name: 打包并计算校验值
+        id: pack
+        shell: pwsh
+        run: |
+          $ver = '${{ github.ref_name }}'
+          $zip = "MovingBackground_${ver}_win64.zip"
+          Compress-Archive -Path 'MovingBackground.exe','bg.jpg' -DestinationPath $zip -Force
+          $exeSha = (Get-FileHash 'MovingBackground.exe' -Algorithm SHA256).Hash.ToLower()
+          $zipSha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "ZIP=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "EXE_SHA=$exeSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "ZIP_SHA=$zipSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Get-Item $zip | Format-List Name, Length
+
+      - name: 生成 Release 正文（把校验值填进模板）
+        shell: pwsh
+        run: |
+          $tpl = Get-Content '.github/release-body.md' -Raw -Encoding utf8
+          $tpl = $tpl.Replace('__ZIP_NAME__',   '${{ steps.pack.outputs.ZIP }}')
+          $tpl = $tpl.Replace('__EXE_SHA256__', '${{ steps.pack.outputs.EXE_SHA }}')
+          $tpl = $tpl.Replace('__ZIP_SHA256__', '${{ steps.pack.outputs.ZIP_SHA }}')
+          $tpl | Out-File -FilePath 'release_body.md' -Encoding utf8 -NoNewline
+          Get-Content 'release_body.md' -TotalCount 8
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release create '${{ github.ref_name }}' '${{ steps.pack.outputs.ZIP }}' --repo '${{ github.repository }}' --title "MovingBackground ${{ github.ref_name }} — 桌面动态背景层 / Desktop Dynamic Background Layer" --notes-file release_body.md
+
+      - name: 确认发布结果
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}'
