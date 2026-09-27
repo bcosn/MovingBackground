@@ -1,0 +1,64 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  #  MSVC：README 里推荐的手动编译方式，CI 每次提交都验证一遍
+  # ---------------------------------------------------------------------------
+  msvc:
+    name: MSVC (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 MSVC 环境
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # /utf-8 必须加：源码是 UTF-8 无 BOM，缺这个参数界面中文会乱码
+      - name: 编译
+        shell: cmd
+        run: cl /nologo /utf-8 /EHsc /O2 /W3 /DUNICODE /D_UNICODE MovingBackground.cpp /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib gdiplus.lib shell32.lib comdlg32.lib advapi32.lib winmm.lib /OUT:MovingBackground.exe
+
+      - name: 检查产物
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'MovingBackground.exe')) {
+            throw '编译没有产出 MovingBackground.exe'
+          }
+          Get-Item 'MovingBackground.exe' | Format-List Name, Length
+
+  # ---------------------------------------------------------------------------
+  #  MinGW-w64：README 里给的备选编译方式，保证两条路都能走通
+  # ---------------------------------------------------------------------------
+  mingw:
+    name: MinGW-w64 (MSYS2)
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 MSYS2 + MinGW-w64 GCC
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: 编译
+        shell: msys2 {0}
+        run: g++ -O2 -municode -mwindows -Wall MovingBackground.cpp -o MovingBackground.exe -lgdiplus -lgdi32 -luser32 -lshell32 -lcomdlg32 -lwinmm -static
+
+      - name: 检查产物
+        shell: msys2 {0}
+        run: |
+          test -f MovingBackground.exe
+          ls -l MovingBackground.exe
